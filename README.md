@@ -1,108 +1,94 @@
-Pyrogram kutubxonasida InlineKeyboardMarkup (3 ta tugma bilan), send_media_group (kamida 3 ta element) va file_id keshlash mantiqi (ikkinchi marta fayl yuklanmasdan, saqlab qolingan file_id orqali tezkor yuborilishi) ko'rsatilgan to'liq va amaliy misol:
+Pyrogram kutubxonasida callback_query.answer(), qisqa callback_data formati va InlineQueryResultArticle yordamida inline so'rovlarga javob berish amaliyoti:
 
 Python kodi (main.py)
 Python
 import os
 from pyrogram import Client, filters
 from pyrogram.types import (
+    CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    InputMediaPhoto,
-    Message,
+    InlineQuery,
+    InlineQueryResultArticle,
+    InputTextMessageContent,
 )
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 app = Client(
     name="my_bot_session",
-    api_id=123456,  # O'zingizning API ID
-    api_hash="your_api_hash_here",  # O'zingizning API Hash
-    bot_token="your_bot_token_here",  # O'zingizning Bot Token
+    api_id=123456,
+    api_hash="your_api_hash_here",
+    bot_token="your_bot_token_here",
     workdir=BASE_DIR,
     in_memory=True,
 )
 
-# File ID larni xotirada keshlash uchun lug'at (Cache)
-CACHED_FILE_IDS = []
-
-# Yuboriladigan mahalliy (lokal) rasmlar yo'li
-LOCAL_IMAGES = ["photos/photo1.jpg", "photos/photo2.jpg", "photos/photo3.jpg"]
-
-
-# 1. InlineKeyboardMarkup: Kamida 3 ta tugma bilan
-def get_main_keyboard():
+# 1. Callback button va qisqa callback_data (64 bayt chegarasi ichida)
+# callback_data: "act:shw" -> bor-yo'g'i 7 bayt
+def get_inline_keyboard():
     return InlineKeyboardMarkup(
         [
             [
                 InlineKeyboardButton(
-                    "🖼 Albom yuborish", callback_data="send_album"
-                ),
-                InlineKeyboardButton("ℹ️ Ma'lumot", callback_data="info"),
-            ],
-            [
-                InlineKeyboardButton(
-                    "🌐 Veb-saytga o'tish", url="https://telegram.org"
+                    "Ma'lumotni ko'rsat", callback_data="act:shw"
                 )
-            ],
+            ]
         ]
     )
 
 
-@app.on_message(filters.command("start"))
-async def start_handler(client: Client, message: Message):
+@app.on_message(filters.command("info"))
+async def info_command(client: Client, message):
     await message.reply_text(
-        text="Xush kelibsiz! Quyidagi tugmalardan birini tanlang:",
-        reply_markup=get_main_keyboard(),
+        "Tugmani bosing:", reply_markup=get_inline_keyboard()
     )
 
 
-# 2. send_media_group + file_id keshlash mantiqi
-@app.on_message(filters.command("album"))
-async def send_album_handler(client: Client, message: Message):
-    global CACHED_FILE_IDS
+# 2. Callback handler va callback_query.answer() ishlatilishi
+# HAR BIR callback handlerda answer() chaqirilishi shart!
+@app.on_callback_query(filters.regex(r"^act:shw$"))
+async def handle_callback(client: Client, callback_query: CallbackQuery):
+    # Telegram interfeysidagi yuklanish ("loading") belgisini yo'qotish va pop-up chiqarish
+    await callback_query.answer("So'rov muvaffaqiyatli bajarildi!", show_alert=True)
 
-    # KESH TEKSHIRUVI:
-    # Agar keshda file_id lar bor bo'lsa (2-chaqiruv va undan son'g), lokal fayllar qayta YUKLANMAYDI!
-    if CACHED_FILE_IDS:
-        print("[KESH] Rasm file_id lari keshdan olindi va qayta yuklanmasdan yuborilmoqda...")
-        media_group = [InputMediaPhoto(media=file_id) for file_id in CACHED_FILE_IDS]
-    
-    # Birinchi marta chaqirilganda: fayllar diskdan o'qiladi va Telegram serveriga yuklanadi
-    else:
-        print("[SERVER] Rasmlar birinchi marta diskdan Telegram'ga yuklanmoqda...")
-        media_group = [
-            InputMediaPhoto(media=LOCAL_IMAGES[0], caption="1-rasm (Albom)"),
-            InputMediaPhoto(media=LOCAL_IMAGES[1], caption="2-rasm (Albom)"),
-            InputMediaPhoto(media=LOCAL_IMAGES[2], caption="3-rasm (Albom)"),
-        ]
+    # Xabar matnini yangilash
+    await callback_query.edit_message_text("Tugma bosildi va ma'lumot ko'rsatildi.")
 
-    # send_media_group orqali kamida 3 ta elementdan iborat media guruh yuborish
-    sent_messages = await client.send_media_group(
-        chat_id=message.chat.id,
-        media=media_group
-    )
 
-    # Birinchi yuklashdan so'ng Telegram qaytargan file_id larni keshga saqlab qo'yamiz
-    if not CACHED_FILE_IDS:
-        for msg in sent_messages:
-            if msg.photo:
-                CACHED_FILE_IDS.append(msg.photo.file_id)
-        print(f"[KESH] 3 ta rasmning file_id lari xotiraga saqlandi: {CACHED_FILE_IDS}")
+# 3. Inline Query va InlineQueryResultArticle
+@app.on_inline_query()
+async def inline_query_handler(client: Client, inline_query: InlineQuery):
+    query_text = inline_query.query.strip() or "Bo'sh so'rov"
+
+    results = [
+        InlineQueryResultArticle(
+            title="Matnni yuborish",
+            description=f"Kiritilgan matn: {query_text}",
+            input_message_content=InputTextMessageContent(
+                message_text=f"🔍 **Inline so'rov natijasi:**\n{query_text}"
+            ),
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("Batafsil", callback_data="act:shw")]]
+            ),
+        )
+    ]
+
+    # Inline query natijalarini yuborish
+    await inline_query.answer(results=results, cache_time=1)
 
 
 if __name__ == "__main__":
     app.run()
-Koddagi talablar bajarilishi bo'yicha tushuntirish:
-InlineKeyboardMarkup (3 ta tugma):
+Asosiy talablar bajarilishi:
+callback_query.answer():
 
-get_main_keyboard() funksiyasida InlineKeyboardMarkup orqali 3 ta tugma yaratildi: "🖼 Albom yuborish", "ℹ️ Ma'lumot" va "🌐 Veb-saytga o'tish".
+Har bir callback kelganda await callback_query.answer() chaqirildi. Bu Telegram tugmasida aylanib turadigan yuklanish belgisini to'xtatadi va foydalanuvchiga tasdiq (alert yoki toast bildirishnoma) qaytaradi.
 
-send_media_group (3 ta element):
+Qisqa callback_data format (64 bayt):
 
-/album buyrug'i berilganda client.send_media_group() funksiyasi orqali kamida 3 ta rasmdan iborat albom yuboriladi.
+callback_data="act:shw" ko'rinishida prefiksli va juda qisqa format ishlatildi (7 bayt). Telegram callback_data uchun maksimum 64 bayt limit belgilagan, shuning uchun prefikslardan foydalanish eng to'g'ri amaliyotdir.
 
-file_id keshlash mantiqi:
+InlineQueryResultArticle:
 
-Birinchi chaqiruvda: CACHED_FILE_IDS bo'sh bo'ladi. Rasmlar diskdagi fayllardan (photos/photo1.jpg, ...) Telegram serveriga yuklanadi va Telegram tomonidan berilgan har bir rasmning file_id si CACHED_FILE_IDS ro'yxatiga saqlanadi.
-
-Ikkinchi (va keyingi) chaqiruvlarda: Dastur if CACHED_FILE_IDS: shartiga kiradi va fayllarni internet orqali qayta diskdan yuklab o'tirmay, Telegram serveridagi tayyor file_id lardan foydalanadi. Bu botning ishlash tezligini keskin oshiradi va trafikni tejaydi.
+@app.on_inline_query() o'shlanganda, InlineQueryResultArticle obyektidan foydalanib matnli natija yaratildi va input_message_content orqali yuboriladigan xabar mazmuni belgilandi.
