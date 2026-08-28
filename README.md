@@ -1,71 +1,108 @@
-Pyrogram loyihasida sessiya fayllarini chetlab o'tish, workdir parametridan foydalanish va in_memory=True rejimida Client yaratish kabi talablarga mos tayyorlangan namuna:
+Pyrogram kutubxonasida InlineKeyboardMarkup (3 ta tugma bilan), send_media_group (kamida 3 ta element) va file_id keshlash mantiqi (ikkinchi marta fayl yuklanmasdan, saqlab qolingan file_id orqali tezkor yuborilishi) ko'rsatilgan to'liq va amaliy misol:
 
-1. .gitignore fayli
-Sessiya fayllari (.session), ularning vaqtinchalik jurnallari (.session-journal) va boshqa maxfiy ma'lumotlar Git repozitoriyasiga tushib qolmasligi uchun .gitignore fayliga quyidagicha yoziladi:
-
-Code snippet
-# Pyrogram session fayllari
-*.session
-*.session-journal
-
-# Python kesh fayllari
-__pycache__/
-*.pyc
-
-# Muhit o'zgaruvchilari (API kalitlar va tokenlar)
-.env
-2. Python kodi (main.py)
-workdir parametringiz fayllar qayerda saqlanishini aniq ko'rsatadi, in_memory=True esa seansni xotirada (diskka .session faylini yozmasdan) yuritish imkonini beradi.
-
+Python kodi (main.py)
 Python
 import os
 from pyrogram import Client, filters
-from pyrogram.enums import ChatMemberStatus
-from pyrogram.types import Message
-
-# Loyihaning asosiy ishchi papkasini (workdir) aniq ko'rsatish
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-# in_memory=True va workdir parametrlari bilan Client yaratish
-app = Client(
-    name="my_memory_session",
-    api_id=123456,                     # O'zingizning API ID
-    api_hash="your_api_hash_here",     # O'zingizning API Hash
-    bot_token="your_bot_token_here",   # O'zingizning Bot Token
-    workdir=BASE_DIR,                  # Ishchi papka aniq ko'rsatilgan
-    in_memory=True                     # Sessiyani diskka emas, RAM'ga saqlash
+from pyrogram.types import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    InputMediaPhoto,
+    Message,
 )
 
-# 1. get_chat_member va filters.create yordamida is_admin filtrini yaratish
-async def admin_check_func(filter, client, message: Message):
-    if not message.chat or not message.from_user:
-        return False
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+app = Client(
+    name="my_bot_session",
+    api_id=123456,  # O'zingizning API ID
+    api_hash="your_api_hash_here",  # O'zingizning API Hash
+    bot_token="your_bot_token_here",  # O'zingizning Bot Token
+    workdir=BASE_DIR,
+    in_memory=True,
+)
+
+# File ID larni xotirada keshlash uchun lug'at (Cache)
+CACHED_FILE_IDS = []
+
+# Yuboriladigan mahalliy (lokal) rasmlar yo'li
+LOCAL_IMAGES = ["photos/photo1.jpg", "photos/photo2.jpg", "photos/photo3.jpg"]
+
+
+# 1. InlineKeyboardMarkup: Kamida 3 ta tugma bilan
+def get_main_keyboard():
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "🖼 Albom yuborish", callback_data="send_album"
+                ),
+                InlineKeyboardButton("ℹ️ Ma'lumot", callback_data="info"),
+            ],
+            [
+                InlineKeyboardButton(
+                    "🌐 Veb-saytga o'tish", url="https://telegram.org"
+                )
+            ],
+        ]
+    )
+
+
+@app.on_message(filters.command("start"))
+async def start_handler(client: Client, message: Message):
+    await message.reply_text(
+        text="Xush kelibsiz! Quyidagi tugmalardan birini tanlang:",
+        reply_markup=get_main_keyboard(),
+    )
+
+
+# 2. send_media_group + file_id keshlash mantiqi
+@app.on_message(filters.command("album"))
+async def send_album_handler(client: Client, message: Message):
+    global CACHED_FILE_IDS
+
+    # KESH TEKSHIRUVI:
+    # Agar keshda file_id lar bor bo'lsa (2-chaqiruv va undan son'g), lokal fayllar qayta YUKLANMAYDI!
+    if CACHED_FILE_IDS:
+        print("[KESH] Rasm file_id lari keshdan olindi va qayta yuklanmasdan yuborilmoqda...")
+        media_group = [InputMediaPhoto(media=file_id) for file_id in CACHED_FILE_IDS]
     
-    member = await client.get_chat_member(message.chat.id, message.from_user.id)
-    return member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]
+    # Birinchi marta chaqirilganda: fayllar diskdan o'qiladi va Telegram serveriga yuklanadi
+    else:
+        print("[SERVER] Rasmlar birinchi marta diskdan Telegram'ga yuklanmoqda...")
+        media_group = [
+            InputMediaPhoto(media=LOCAL_IMAGES[0], caption="1-rasm (Albom)"),
+            InputMediaPhoto(media=LOCAL_IMAGES[1], caption="2-rasm (Albom)"),
+            InputMediaPhoto(media=LOCAL_IMAGES[2], caption="3-rasm (Albom)"),
+        ]
 
-is_admin = filters.create(admin_check_func)
+    # send_media_group orqali kamida 3 ta elementdan iborat media guruh yuborish
+    sent_messages = await client.send_media_group(
+        chat_id=message.chat.id,
+        media=media_group
+    )
 
-# 2. Operatorlar kombinatsiyasi (&, |, ~):
-# /ban buyrug'i AND guruh/superguruh chatlari AND (admin BO'LGAN) AND (botning o'zi BO'LMAGAN)
-ban_filter = filters.command("ban") & (filters.group | filters.supergroup) & is_admin & ~filters.me
+    # Birinchi yuklashdan so'ng Telegram qaytargan file_id larni keshga saqlab qo'yamiz
+    if not CACHED_FILE_IDS:
+        for msg in sent_messages:
+            if msg.photo:
+                CACHED_FILE_IDS.append(msg.photo.file_id)
+        print(f"[KESH] 3 ta rasmning file_id lari xotiraga saqlandi: {CACHED_FILE_IDS}")
 
-@app.on_message(ban_filter)
-async def ban_handler(client: Client, message: Message):
-    await message.reply_text("Foydalanuvchi bloklandi!")
-
-# 3. Media xabarlar uchun handler (filters.photo | filters.video)
-media_filter = filters.photo | filters.video
-
-@app.on_message(media_filter)
-async def media_handler(client: Client, message: Message):
-    await message.reply_text("Rasm yoki video qabul qilindi!")
 
 if __name__ == "__main__":
     app.run()
-Asosiy jihatlar:
-.gitignore: *.session va *.session-journal qoidalari orqali xavfsizlik va keraksiz fayllarni chetlab o'tish ta'minlangan.
+Koddagi talablar bajarilishi bo'yicha tushuntirish:
+InlineKeyboardMarkup (3 ta tugma):
 
-workdir=BASE_DIR: Pyrogram dasturi qaysi papkada ishlayotganini va ishchi resurslarni qayerdan qidirishini ko'rsatadi.
+get_main_keyboard() funksiyasida InlineKeyboardMarkup orqali 3 ta tugma yaratildi: "🖼 Albom yuborish", "ℹ️ Ma'lumot" va "🌐 Veb-saytga o'tish".
 
-in_memory=True: Sessiyani xotirada saqlaydi. Bu parametr yoqilganda Pyrogram diskda .session faylini umuman yaratmaydi, bu esa test rejimida yoki vaqtinchalik sessiyalarda juda qulay hisoblanadi.
+send_media_group (3 ta element):
+
+/album buyrug'i berilganda client.send_media_group() funksiyasi orqali kamida 3 ta rasmdan iborat albom yuboriladi.
+
+file_id keshlash mantiqi:
+
+Birinchi chaqiruvda: CACHED_FILE_IDS bo'sh bo'ladi. Rasmlar diskdagi fayllardan (photos/photo1.jpg, ...) Telegram serveriga yuklanadi va Telegram tomonidan berilgan har bir rasmning file_id si CACHED_FILE_IDS ro'yxatiga saqlanadi.
+
+Ikkinchi (va keyingi) chaqiruvlarda: Dastur if CACHED_FILE_IDS: shartiga kiradi va fayllarni internet orqali qayta diskdan yuklab o'tirmay, Telegram serveridagi tayyor file_id lardan foydalanadi. Bu botning ishlash tezligini keskin oshiradi va trafikni tejaydi.
