@@ -1,66 +1,98 @@
-Topshiriq mezonlari va berilgan mulohazalar perpektivasidan kelib chiqib, is_tgcrypto_active() hamda benchmark_history_read() funksiyalarini o'z ichiga olgan, 300 ta xabarni o'qish tezligini TgCrypto bor/yo'q holatlarida solishtiruvchi to'liq modul:
+Pyrogram botida Restart siyosati (Docker compose orqali), Workdir saqlanishi (persistent volume) hamda SIGTERM signallarini ushlash / graceful shutdown (app.stop()) talablariga mos to'liq yechim:
 
-plugins/tgcrypto_benchmark.py
+1. Python kodi (bot.py) — Graceful Shutdown va SIGTERM Handler
 Python
-import time
 import asyncio
+import os
+import signal
+import sys
 from pyrogram import Client, filters
 from pyrogram.types import Message
 
-# TgCrypto kutubxonasi o'rnatilganligini va faolligini tekshirish
-def is_tgcrypto_active() -> bool:
-    try:
-        import tgcrypto
-        return True
-    except ImportError:
-        return False
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Chat tarixidan 300 ta xabarni o'qish tezligini o'lchash funksiyasi
-async def benchmark_history_read(client: Client, chat_id: int, limit: int = 300) -> float:
-    start_time = time.perf_counter()
+app = Client(
+    name="my_graceful_bot",
+    api_id=123456,                     # API ID
+    api_hash="your_api_hash_here",     # API Hash
+    bot_token="your_bot_token_here",   # Bot Token
+    workdir=BASE_DIR,
+    in_memory=True,
+    plugins=dict(root="plugins")
+)
+
+# SIGTERM / SIGINT signallarini ushlab botni to'g'ri to'xtatish (Graceful Shutdown)
+def signal_handler(sig, frame):
+    print(f"\n[SIGNAL] {sig} signali qabul qilindi. Bot to'xtatilmoqda...")
     
-    # async for orqali xabarlarni xotiraga to'liq yig'masdan ketma-ket o'qish
-    async for message in client.get_chat_history(chat_id=chat_id, limit=limit):
-        _ = message.text  # Xabarga ishlov berish simulyatsiyasi
+    # Asinxron ravishda app.stop() chaqiruvini bajarish
+    loop = asyncio.get_event_loop()
+    if loop.is_running():
+        loop.create_task(shutdown())
+    else:
+        loop.run_until_complete(shutdown())
 
-    end_time = time.perf_counter()
-    return end_time - start_time
+async def shutdown():
+    print("[SHUTDOWN] app.stop() chaqirilmoqda...")
+    await app.stop()
+    print("[SHUTDOWN] Bot muvaffaqiyatli to'xtatildi.")
+    sys.exit(0)
 
-@Client.on_message(filters.command("benchmark_tgcrypto") & filters.me)
-async def tgcrypto_benchmark_handler(client: Client, message: Message):
-    chat_id = message.chat.id
-    limit = 300
+# Signallarni ro'yxatdan o'tkazish
+signal.signal(signal.SIGTERM, signal_handler)  # Docker stop signali
+signal.signal(signal.SIGINT, signal_handler)   # Ctrl+C signali
 
-    await message.reply_text(f"⏱ `{limit}` ta xabar o'qilmoqda va benchmark o'tkazilmoqda...")
+if __name__ == "__main__":
+    print("Bot ishga tushmoqda...")
+    app.run()
+2. Docker sozlamalari (docker-compose.yml) — Restart Policy & Persistent Workdir
+workdir doimiy saqlanishi (persistent storage) uchun Docker Volume bog'lanadi va konteyner xatoga uchrasa yoki to'xtasa, avtomatik qayta yoqilishi uchun restart: unless-stopped (yoki on-failure) beriladi.
 
-    # 1. TgCrypto holatini aniqlash
-    tgcrypto_status = is_tgcrypto_active()
+YAML
+version: '3.8'
 
-    # 2. Xabarlarni o'qish vaqti
-    elapsed_time = await benchmark_history_read(client, chat_id, limit)
-
-    # 3. Solishtirish uchun taxminiy nazariy hisob-kitob va xulosa
-    # TgCrypto AES va DH shifrlash amallarini C tilidagi modullar orqali 3x-5x tezlashtiradi
-    status_text = "Mavjud va faol ✅" if tgcrypto_status else "O'rnatilmagan (Alohid pyrogram kriptografiyasi ishlatilmoqda) ❌"
+services:
+  pyrogram_bot:
+    build: .
+    container_name: pyrogram_app
+    # 1. Restart siyosati: unless-stopped (yoki on-failure)
+    restart: unless-stopped
     
-    report = (
-        f"📊 **TgCrypto Benchmark Natijalari:**\n\n"
-        f"🔹 **TgCrypto holati:** {status_text}\n"
-        f"🔹 **O'qilgan xabarlar soni:** `{limit}` ta\n"
-        f"⏱ **O'qish uchun ketgan vaqt:** `{elapsed_time:.4f}` soniya\n\n"
-        f"📝 **Yozma Xulosa:**\n"
-        f"Pyrogram Telegram MTProto protokoli orqali barcha ma'lumotlarni shifrlangan holda uzatadi va qabul qiladi. "
-        f"TgCrypto C tilida yozilgan bo'lib, Python'ning standart `cryptography` moduliga qaraganda "
-        f"shifrlash hamda dekodlash amallarini taxminan **300% - 500%** ga tezlashtirib beradi.\n\n"
-    )
+    # 2. Persistent workdir: Konteyner o'chib ketsa ham ma'lumotlar saqlanib qoladi
+    volumes:
+      - bot_data:/app
+    
+    environment:
+      - PYTHONUNBUFFERED=1
 
-    if not tgcrypto_status:
-        report += "💡 **Tavsiya:** Katta hajmdagi chat tarixini o'qishda tezlikni oshirish uchun `pip install tgcrypto` buyrug'i orqali paketni o'rnating."
+volumes:
+  bot_data:
+3. Konteynerlashtirish uchun Dockerfile
+Dockerfile
+FROM python:3.10-slim
 
-    await message.reply_text(report)
-Bajarilgan yaxshilanishlar:
-is_tgcrypto_active() funksiyasi: tgcrypto moduli tizimda o'rnatilganligini va Pyrogram uni shifrlash uchun ishlatayotganini aniqlaydi.
+WORKDIR /app
 
-benchmark_history_read() funksiyasi: Chatdan kamida 300 ta xabarni async for yordamida o'qiydi va time.perf_counter() orqali ketgan vaqtni o'lchaydi.
+# Talab etiladigan paketlarni o'rnatish
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-Natijalar va Yozma Xulosa: TgCrypto'ning shifrlash/dekodlash (AES-IGE / DH) jarayonidagi tezlikka ta'siri hamda C-extension texnologiyasi hisobiga Python standart kutubxonasidan qanchalik ustunligi bo'yicha aniq xulosa berildi.
+# Manba kodini ko'chirish
+COPY . .
+
+# SIGTERM signalini to'g'ridan-to'g'ri Python protsessiga uzatish uchun
+CMD ["python", "bot.py"]
+Talablar bajarilishi bo'yicha tushuntirish:
+Restart siyosati (unless-stopped / on-failure):
+
+docker-compose.yml faylida restart: unless-stopped belgilandi. Bu bot server o'chib yoqilganda yoki kutilmagan xatolik berib to'xtaganda konteynerni avtomatik qayta ishga tushiradi.
+
+Persistent workdir:
+
+Docker volumes: orqali konteyner ichidagi /app ishchi papkasi (workdir) bot_data nomli doimiy volume'ga bog'landi. Bu bot to'xtaganda ham ishchi fayllar va resurslar o'chib ketmasligini ta'minlaydi.
+
+SIGTERM handler va app.stop():
+
+signal.signal(signal.SIGTERM, signal_handler) orqali Docker konteynerni to'xtatish paytida yuboriladigan SIGTERM signali ushlab qolindi.
+
+signal_handler ichida app.stop() funksiyasi chaqirilib, bot Telegram serverlari bilan ulanishni xavfsiz yopadi va resurslarni to'g'ri bo'shatadi (Graceful Shutdown).
