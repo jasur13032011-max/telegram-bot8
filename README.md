@@ -1,17 +1,12 @@
-Pyrogram kutubxonasida callback_query.answer(), qisqa callback_data formati va InlineQueryResultArticle yordamida inline so'rovlarga javob berish amaliyoti:
+Pyrogram’da xabarlarni generativ ko'rinishda (asinxron generator orqali) bittalab olish, xotirani tejash uchun ularni ro'yxatga to'liq yig'masdan darhol qayta ishlash hamda FloodWait xatoligini to'g'ri ushlab kutish kabi talablarga mos tayyorlangan namuna:
 
 Python kodi (main.py)
 Python
+import asyncio
 import os
 from pyrogram import Client, filters
-from pyrogram.types import (
-    CallbackQuery,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    InlineQuery,
-    InlineQueryResultArticle,
-    InputTextMessageContent,
-)
+from pyrogram.errors import FloodWait
+from pyrogram.types import Message
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -24,71 +19,57 @@ app = Client(
     in_memory=True,
 )
 
-# 1. Callback button va qisqa callback_data (64 bayt chegarasi ichida)
-# callback_data: "act:shw" -> bor-yo'g'i 7 bayt
-def get_inline_keyboard():
-    return InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton(
-                    "Ma'lumotni ko'rsat", callback_data="act:shw"
-                )
-            ]
-        ]
-    )
 
+@app.on_message(filters.command("process_history"))
+async def process_history_handler(client: Client, message: Message):
+    chat_id = message.chat.id
+    processed_count = 0
 
-@app.on_message(filters.command("info"))
-async def info_command(client: Client, message):
+    await message.reply_text("Xabarlar ketma-ket qayta ishlanmoqda...")
+
+    try:
+        # 1. async for ishlatilishi: xabarlar oqim ko'rinishida keladi.
+        # Natija ro'yxatga (list) yig'ilmaydi, har bir xabar kelishi bilan darhol qayta ishlanadi.
+        async for msg in client.get_chat_history(chat_id=chat_id, limit=50):
+            try:
+                # Har bir xabar uchun darhol ishlov berish (masalan, matnini konsolga chiqarish)
+                if msg.text:
+                    print(f"[Xabar ID: {msg.id}] -> {msg.text[:30]}")
+
+                processed_count += 1
+
+                # 2. Telegram FloodWait chegarasiga tushmaslik uchun kichik tanaffus
+                await asyncio.sleep(0.1)
+
+            # 3. FloodWait ushlash va kutish mantiqi
+            except FloodWait as e:
+                print(f"FloodWait ga tushdik! {e.value} soniya kutilmoqda...")
+                # Telegram talab qilgan soniya miqdoricha kutiladi
+                await asyncio.sleep(e.value)
+
+    except FloodWait as e:
+        # Umumiy oqim davomida berilgan FloodWait uchun
+        print(f"Tashqi FloodWait: {e.value} soniya kutilmoqda...")
+        await asyncio.sleep(e.value)
+
     await message.reply_text(
-        "Tugmani bosing:", reply_markup=get_inline_keyboard()
+        f"Jarayon yakunlandi! Jami {processed_count} ta xabar qayta ishlandi."
     )
-
-
-# 2. Callback handler va callback_query.answer() ishlatilishi
-# HAR BIR callback handlerda answer() chaqirilishi shart!
-@app.on_callback_query(filters.regex(r"^act:shw$"))
-async def handle_callback(client: Client, callback_query: CallbackQuery):
-    # Telegram interfeysidagi yuklanish ("loading") belgisini yo'qotish va pop-up chiqarish
-    await callback_query.answer("So'rov muvaffaqiyatli bajarildi!", show_alert=True)
-
-    # Xabar matnini yangilash
-    await callback_query.edit_message_text("Tugma bosildi va ma'lumot ko'rsatildi.")
-
-
-# 3. Inline Query va InlineQueryResultArticle
-@app.on_inline_query()
-async def inline_query_handler(client: Client, inline_query: InlineQuery):
-    query_text = inline_query.query.strip() or "Bo'sh so'rov"
-
-    results = [
-        InlineQueryResultArticle(
-            title="Matnni yuborish",
-            description=f"Kiritilgan matn: {query_text}",
-            input_message_content=InputTextMessageContent(
-                message_text=f"🔍 **Inline so'rov natijasi:**\n{query_text}"
-            ),
-            reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("Batafsil", callback_data="act:shw")]]
-            ),
-        )
-    ]
-
-    # Inline query natijalarini yuborish
-    await inline_query.answer(results=results, cache_time=1)
 
 
 if __name__ == "__main__":
     app.run()
-Asosiy talablar bajarilishi:
-callback_query.answer():
+Talablar bo'yicha tushuntirish:
+async for ishlatilishi:
 
-Har bir callback kelganda await callback_query.answer() chaqirildi. Bu Telegram tugmasida aylanib turadigan yuklanish belgisini to'xtatadi va foydalanuvchiga tasdiq (alert yoki toast bildirishnoma) qaytaradi.
+Pyrogram'ning get_chat_history() funksiyasi asinxron generator qaytaradi. Shu sababli u bilan async for ishlatildi.
 
-Qisqa callback_data format (64 bayt):
+Natija ro'yxatga yig'ilmasligi (streaming):
 
-callback_data="act:shw" ko'rinishida prefiksli va juda qisqa format ishlatildi (7 bayt). Telegram callback_data uchun maksimum 64 bayt limit belgilagan, shuning uchun prefikslardan foydalanish eng to'g'ri amaliyotdir.
+Xabarlar [msg async for msg in ...] ko'rinishida hotiraga to'planmaydi (list yaratilmaydi). Har bir kelgan Message obyekti sikl ichida darhol ishlanadi va keyingi elementga o'tiladi. Bu operativ xotira (RAM) sarfini keskin kamaytiradi.
 
-InlineQueryResultArticle:
+FloodWait uchun try/except va sleep:
 
-@app.on_inline_query() o'shlanganda, InlineQueryResultArticle obyektidan foydalanib matnli natija yaratildi va input_message_content orqali yuboriladigan xabar mazmuni belgilandi.
+Pyrogram Telegram API cheklovlariga duch kelganida errors.FloodWait xatoligini tashlaydi. e.value atributida Telegram qancha soniya kutish kerakligini qaytaradi.
+
+except FloodWait as e: bloki orqali xatolik ushlanadi va await asyncio.sleep(e.value) yordamida bot belgilangan vaqt davomida to'xtatilib, so'ngra ishni xavfsiz davom ettiradi.
