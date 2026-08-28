@@ -1,46 +1,71 @@
-Pyrogram-da Telegram API raw metodlarini to'g'ri qo'llash, ya'ni client.invoke(), resolve_peer() va pyrogram.errors xatoliklarini bitta plugin faylida ishlatish usuli:
+samaradorligini baholash uchun amaliy test va xulosa.
 
-plugins/raw_methods.py
+Benchmark testi (plugins/benchmark.py)
+Ushbu kod bir xil rasmni 10 marta yuborishda faylni qayta yuklash va tayyor file_id dan foydalanish o'rtasidagi vaqt farqini time.perf_counter() yordamida o'lchaydi:
+
 Python
+import os
+import time
 from pyrogram import Client, filters
-from pyrogram.errors import PeerIdInvalid, UserNotParticipant, RPCError
-from pyrogram.raw.functions.channels import GetParticipant
 from pyrogram.types import Message
 
-# Klass dekoratori qo'llaniladi (@Client.on_message)
-@Client.on_message(filters.command("check_member") & filters.group)
-async def check_member_handler(client: Client, message: Message):
-    if len(message.command) < 2:
-        await message.reply_text("Iltimos, foydalanuvchi ID yoki username'ini kiriting.\nMisol: `/check_member @username`")
-        return
+# Sinov uchun rasm fayli yo'li
+TEST_IMAGE = "photos/photo1.jpg"
+CACHED_FILE_ID = None
 
-    user_input = message.command[1]
+@Client.on_message(filters.command("benchmark") & filters.me)
+async def benchmark_handler(client: Client, message: Message):
+    global CACHED_FILE_ID
+    chat_id = message.chat.id
+    iterations = 10
 
-    try:
-        # 1. resolve_peer() yordamida obyektni Peer ko'rinishiga o'tkazish
-        peer_channel = await client.resolve_peer(message.chat.id)
-        peer_user = await client.resolve_peer(user_input)
+    await message.reply_text("⏱ Sinov boshlanmoqda (10 marta yuborish)...")
 
-        # 2. client.invoke() ni to'g'ridan-to'g mezonlar bilan chaqirish (raw TL-method)
-        participant_info = await client.invoke(
-            GetParticipant(
-                channel=peer_channel,
-                participant=peer_user
-            )
-        )
+    # -------------------------------------------------------------
+    # 1-HOLAT: file_id KESHSIZ (Har safar faylni qayta diskdan yuklash)
+    # -------------------------------------------------------------
+    start_no_cache = time.perf_counter()
+    
+    for _ in range(iterations):
+        sent_msg = await client.send_photo(chat_id=chat_id, photo=TEST_IMAGE)
+        # Birinchi yuborilgan rasmdan file_id ni saqlab olamiz
+        if not CACHED_FILE_ID:
+            CACHED_FILE_ID = sent_msg.photo.file_id
 
-        await message.reply_text(f"Foydalanuvchi guruh a'zosi! Roli: {type(participant_info.participant).__name__}")
+    end_no_cache = time.perf_counter()
+    time_no_cache = end_no_cache - start_no_cache
 
-    # 3. Xatolarni pyrogram.errors orqali ushlash
-    except PeerIdInvalid:
-        await message.reply_text("Kiritilgan foydalanuvchi yoki chat topilmadi!")
-    except UserNotParticipant:
-        await message.reply_text("Ushbu foydalanuvchi guruhda mavjud emas.")
-    except RPCError as e:
-        await message.reply_text(f"Telegram API xatoligi yuz berdi: {e.MESSAGE}")
-Asosiy jihatlar:
-client.invoke(): Wrapper funksiyalar (masalan, get_chat_member) ishlatilmasdan, to'g'ridan-to'g'ri Pyrogram raw funksiyasi (GetParticipant) invoke() ga uzatildi.
+    # -------------------------------------------------------------
+    # 2-HOLAT: file_id KESH BILAN (Tayyor file_id orqali yuborish)
+    # -------------------------------------------------------------
+    start_with_cache = time.perf_counter()
 
-client.resolve_peer(): Chat va foydalanuvchi identifikatorlarini Raw TL obyekti tushunadigan InputPeer formatiga o'tkazish uchun ishlatildi.
+    for _ in range(iterations):
+        await client.send_photo(chat_id=chat_id, photo=CACHED_FILE_ID)
 
-pyrogram.errors: API chaqiruvidan chiqadigan xatoliklar (PeerIdInvalid, UserNotParticipant, RPCError) aniq ushlab olindi.
+    end_with_cache = time.perf_counter()
+    time_with_cache = end_with_cache - start_with_cache
+
+    # -------------------------------------------------------------
+    # NATIJALARNI SOLISHTIRISH
+    # -------------------------------------------------------------
+    speedup = time_no_cache / time_with_cache if time_with_cache > 0 else 0
+
+    result_text = (
+        f"📊 **Performance Benchmark Natijalari (10 ta xabar):**\n\n"
+        f"❌ **Keshsiz (Diskdan yuklash):** `{time_no_cache:.4f}` soniya\n"
+        f"✅ **Kesh bilan (file_id):** `{time_with_cache:.4f}` soniya\n\n"
+        f"🚀 **Tezlanish:** `{speedup:.2f}x` baravar tezroq!"
+    )
+
+    await message.reply_text(result_text)
+Yozma xulosa
+Vaqt va Trafik Tejalishi:
+
+Keshsiz holatda: Har bir chaqiruvda rasm diskdan o'qiladi, tarmoq orqali Telegram serveriga qayta yuklanadi. Bu jarayon lokal internet tezligi va serverga fayl uzatish vaqtiga to'g'ridan-to'g'ri bog'liq bo'lib, sezilarli kechikish beradi.
+
+Keshli holatda: Telegram serverida allaqachon mavjud bo'lgan faylning file_id identifikatori yuboriladi. Fayl qayta yuklanmaydi, faqatgina qisqa matnli buyruq uzatiladi.
+
+Resurs va Cheklovlar (Rate Limits):
+
+Tayyor file_id ishlatilganda botning CPU va tarmoq (bandwidth) sarfi bir necha o'n baravarga kamayadi.
