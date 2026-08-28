@@ -1,50 +1,46 @@
-Aiogram (yoki oxshash Telegram bot kutubxonalarida) filtr holatlarini filters.create(), shuningdek & (AND), | (OR) va ~ (NOT) mantiqiy operatorlaridan foydalanib yozish misoli:
+Pyrogram loyihasida sessiya fayllarini chetlab o'tish, workdir parametridan foydalanish va in_memory=True rejimida Client yaratish kabi talablarga mos tayyorlangan namuna:
+
+1. .gitignore fayli
+Sessiya fayllari (.session), ularning vaqtinchalik jurnallari (.session-journal) va boshqa maxfiy ma'lumotlar Git repozitoriyasiga tushib qolmasligi uchun .gitignore fayliga quyidagicha yoziladi:
+
+Code snippet
+# Pyrogram session fayllari
+*.session
+*.session-journal
+
+# Python kesh fayllari
+__pycache__/
+*.pyc
+
+# Muhit o'zgaruvchilari (API kalitlar va tokenlar)
+.env
+2. Python kodi (main.py)
+workdir parametringiz fayllar qayerda saqlanishini aniq ko'rsatadi, in_memory=True esa seansni xotirada (diskka .session faylini yozmasdan) yuritish imkonini beradi.
 
 Python
-from aiogram import filters
-from aiogram.types import Message
-
-# Custom is_admin filtrini yarating
-is_admin = filters.create(
-    lambda message: message.from_user and message.from_user.id in [12345678, 87654321]
-)
-
-# Boshqa yordamchi filtrlar
-is_private = filters.create(lambda message: message.chat.type == "private")
-is_banned = filters.create(lambda message: message.from_user.is_bot)
-
-# &, | va ~ operatorlarini birgalikda ishlatish:
-# (Admin BO'LGAN OR Shaxsiy chatda bo'lgan) AND (Banned BO'LMAGAN)
-combined_filter = (is_admin | is_private) & ~is_banned
-
-# Bot xabar ishlovchisida (handler) qo'llanilishi:
-@dp.message(combined_filter)
-async def admin_or_private_handler(message: Message):
-    await message.answer("Siz ushbu buyruqni bajarish huquqiga egasiz!")
-Operatorlar tahlili:
-
-filters.create(): Foydalanuvchi IDsi ro'yxatda bor-yo'qligini tekshiruvchi is_admin filtrini yaratadi.
-
-|: Kamida bitta shart bajarilishini tekshiradi (is_admin yoki is_private).
-
-&: Ikkala tomondagi shart ham to'g'ri bo'lishini talab qiladi.
-
-~: Filtr natijasini teskarisiga o'zgartiradi (is_banned bo'lmagan holat).
-Pyrogram kutubxonasi talablariga mos ravishda tayyorlangan to'liq kod:
-
-Python
+import os
 from pyrogram import Client, filters
 from pyrogram.enums import ChatMemberStatus
 from pyrogram.types import Message
 
-app = Client("my_bot")
+# Loyihaning asosiy ishchi papkasini (workdir) aniq ko'rsatish
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# 1. get_chat_member orqali is_admin filtrini filters.create yordamida yaratish
+# in_memory=True va workdir parametrlari bilan Client yaratish
+app = Client(
+    name="my_memory_session",
+    api_id=123456,                     # O'zingizning API ID
+    api_hash="your_api_hash_here",     # O'zingizning API Hash
+    bot_token="your_bot_token_here",   # O'zingizning Bot Token
+    workdir=BASE_DIR,                  # Ishchi papka aniq ko'rsatilgan
+    in_memory=True                     # Sessiyani diskka emas, RAM'ga saqlash
+)
+
+# 1. get_chat_member va filters.create yordamida is_admin filtrini yaratish
 async def admin_check_func(filter, client, message: Message):
     if not message.chat or not message.from_user:
         return False
     
-    # Foydalanuvchining guruhdagi maqomini tekshirish
     member = await client.get_chat_member(message.chat.id, message.from_user.id)
     return member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]
 
@@ -67,12 +63,9 @@ async def media_handler(client: Client, message: Message):
 
 if __name__ == "__main__":
     app.run()
-Koddagi asosiy elementlar va mantiqiy operatorlar:
+Asosiy jihatlar:
+.gitignore: *.session va *.session-journal qoidalari orqali xavfsizlik va keraksiz fayllarni chetlab o'tish ta'minlangan.
 
-filters.create() va get_chat_member: admin_check_func asinxron funksiyasi orqali foydalanuvchining admin yoki guruh egasi ekanligi tekshirilib, custom is_admin filtri hosil qilindi.
+workdir=BASE_DIR: Pyrogram dasturi qaysi papkada ishlayotganini va ishchi resurslarni qayerdan qidirishini ko'rsatadi.
 
-& (AND): /ban buyrug'i, chat turi hamda adminlik huquqini bir vaqtda tekshirish uchun ishlatildi.
-
-| (OR): Guruh yoki superguruh chatlarini (filters.group | filters.supergroup), shuningdek photo yoki video xabarlarni (filters.photo | filters.video) birgalikda qamrab olish uchun qo'llanildi.
-
-~ (NOT): ~filters.me orqali xabar botning o'zidan yuborilmaganligini tekshirish uchun ishlatildi.
+in_memory=True: Sessiyani xotirada saqlaydi. Bu parametr yoqilganda Pyrogram diskda .session faylini umuman yaratmaydi, bu esa test rejimida yoki vaqtinchalik sessiyalarda juda qulay hisoblanadi.
