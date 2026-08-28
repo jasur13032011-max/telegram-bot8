@@ -30,3 +30,49 @@ filters.create(): Foydalanuvchi IDsi ro'yxatda bor-yo'qligini tekshiruvchi is_ad
 &: Ikkala tomondagi shart ham to'g'ri bo'lishini talab qiladi.
 
 ~: Filtr natijasini teskarisiga o'zgartiradi (is_banned bo'lmagan holat).
+Pyrogram kutubxonasi talablariga mos ravishda tayyorlangan to'liq kod:
+
+Python
+from pyrogram import Client, filters
+from pyrogram.enums import ChatMemberStatus
+from pyrogram.types import Message
+
+app = Client("my_bot")
+
+# 1. get_chat_member orqali is_admin filtrini filters.create yordamida yaratish
+async def admin_check_func(filter, client, message: Message):
+    if not message.chat or not message.from_user:
+        return False
+    
+    # Foydalanuvchining guruhdagi maqomini tekshirish
+    member = await client.get_chat_member(message.chat.id, message.from_user.id)
+    return member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]
+
+is_admin = filters.create(admin_check_func)
+
+# 2. Operatorlar kombinatsiyasi (&, |, ~):
+# /ban buyrug'i AND guruh/superguruh chatlari AND (admin BO'LGAN) AND (botning o'zi BO'LMAGAN)
+ban_filter = filters.command("ban") & (filters.group | filters.supergroup) & is_admin & ~filters.me
+
+@app.on_message(ban_filter)
+async def ban_handler(client: Client, message: Message):
+    await message.reply_text("Foydalanuvchi bloklandi!")
+
+# 3. Media xabarlar uchun handler (filters.photo | filters.video)
+media_filter = filters.photo | filters.video
+
+@app.on_message(media_filter)
+async def media_handler(client: Client, message: Message):
+    await message.reply_text("Rasm yoki video qabul qilindi!")
+
+if __name__ == "__main__":
+    app.run()
+Koddagi asosiy elementlar va mantiqiy operatorlar:
+
+filters.create() va get_chat_member: admin_check_func asinxron funksiyasi orqali foydalanuvchining admin yoki guruh egasi ekanligi tekshirilib, custom is_admin filtri hosil qilindi.
+
+& (AND): /ban buyrug'i, chat turi hamda adminlik huquqini bir vaqtda tekshirish uchun ishlatildi.
+
+| (OR): Guruh yoki superguruh chatlarini (filters.group | filters.supergroup), shuningdek photo yoki video xabarlarni (filters.photo | filters.video) birgalikda qamrab olish uchun qo'llanildi.
+
+~ (NOT): ~filters.me orqali xabar botning o'zidan yuborilmaganligini tekshirish uchun ishlatildi.
